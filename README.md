@@ -9,9 +9,8 @@ A `ui_qml` module — a QML view (`src/qml/EthRpcView.qml`) over a small C++ bac
 
 ```bash
 git add -A   # nix only sees git-tracked files
-nix build '.#lgx' --override-input eth_rpc_module git+file://$PWD/../eth-rpc-module
+nix build '.#lgx'
 ```
-See **Build** below for why the override is required today.
 
 ## Why this is its own app and not a page in the wallet
 
@@ -88,11 +87,7 @@ host's `RestrictedUrlInterceptor` reserves that prefix case-insensitively).
 green `ws build` here proves nothing. Build directly:
 
 ```bash
-nix build '.#lgx' --override-input eth_rpc_module git+file://$PWD/../eth-rpc-module
+nix build '.#lgx'
 ```
 
 `nix` only sees git-tracked files: `git add -A` before every build.
-
-The override is **required**, not a convenience: the rev in `flake.lock` predates
-verified routing, so a bare `nix build` has no `verified_proxy_status` /
-`set_verified_proxy_mode` to compile against. Re-lock once that work is pushed.
