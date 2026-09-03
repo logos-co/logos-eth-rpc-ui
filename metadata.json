@@ -1,0 +1,20 @@
+{
+  "name": "eth_rpc_ui",
+  "display_name": "Ethereum RPC",
+  "version": "0.1.0",
+  "type": "ui_qml",
+  "interface": "universal",
+  "category": "wallet",
+  "description": "Device-wide JSON-RPC endpoints and light-client verified routing, shared by every Logos wallet on this device.",
+  "author": "Logos Core Team",
+  "main": "eth_rpc_ui_plugin",
+  "icon": "src/icons/eth_rpc.png",
+  "view": "qml/EthRpcView.qml",
+  "dependencies": ["eth_rpc_module"],
+  "codegen": { "rep": "src/eth_rpc_ui.rep" },
+  "nix": {
+    "external_libraries": [],
+    "packages": { "build": [], "runtime": ["qt6.qtdeclarative"] },
+    "cmake": { "find_packages": [], "extra_sources": [], "extra_include_dirs": [], "extra_link_libraries": [] }
+  }
+}
