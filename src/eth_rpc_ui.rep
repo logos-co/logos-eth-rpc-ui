@@ -1,0 +1,42 @@
+// The QML-facing surface of eth_rpc_module's per-chain configuration.
+//
+// This app configures a DEVICE-WIDE store shared with every Logos wallet. It holds no
+// key material, makes no transaction and shows no balance.
+class EthRpcUi
+{
+    PROP(QString statusText="Starting" READONLY)
+    PROP(QString lastError="" READONLY)
+    PROP(bool busy=false READONLY)
+
+    // One entry per chain this app offers, whether or not eth_rpc has a config for it:
+    // { chainId, name, testnet, configured, endpoint, proxy, proxyRequired, timeoutSecs,
+    //   verifiedTimeoutSecs, verifiedProxyMode }
+    // `configured` false means eth_rpc has no record and every field after it is a default.
+    // `testnet` is ABSENT for a chain id this app has no name for: "we do not know" is not
+    // the same answer as "mainnet", and only one of the two is safe to render.
+    PROP(QString chainsJson="[]" READONLY)
+    PROP(int selectedChainId=0 READONLY)
+
+    // eth_rpc's verdict for the SELECTED chain only:
+    // { ok, chainId, mode, state, usable, blocking, message, action, detail }.
+    // Polled, because a probe costs a real budget and all-chains polling would pay it N times.
+    PROP(QString verdictJson="{}" READONLY)
+
+    // The last endpoint test: { ok, chainId, reportedChainId?, route?, error? }.
+    // Empty until something has been tested.
+    PROP(QString probeJson="{}" READONLY)
+
+    SLOT(void refresh())
+    SLOT(void selectChain(int chainId))
+    // Overwrites ONLY the endpoint. The store is shared, so a user retyping a URL must not
+    // silently reset another wallet's verified mode or timeouts.
+    SLOT(void setEndpoint(int chainId, QString url))
+    SLOT(void setVerifiedProxyMode(int chainId, QString mode))
+    // 0 leaves a field untouched.
+    SLOT(void setTimeouts(int chainId, int timeoutSecs, int verifiedTimeoutSecs))
+    SLOT(void removeChain(int chainId))
+    // eth_chainId round-trip against the stored endpoint. Async: a dead endpoint costs the
+    // full transport timeout.
+    SLOT(void testEndpoint(int chainId))
+    SLOT(void refreshVerdict())
+}
