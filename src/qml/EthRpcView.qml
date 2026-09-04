@@ -38,11 +38,38 @@ Item {
     // does not silently overwrite the other.
     property string addChainError: ""
 
+    // What came back from asking for the verified proxy, when it is worth saying. Empty is
+    // the normal state: a request that reached a provider hands the user over to it, so this
+    // screen is not the one they are looking at.
+    property string routingNote: ""
+
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
             if (moduleName === "eth_rpc_ui") root.ready = isReady && root.backend !== null
         }
+
+        // Endpoints and verified-routing mode are what this app is; being brought here IS
+        // the request, so answer at once. `handoff: true` leaves the user here afterwards.
+        function onIntentRequested(requestId, intent, params, requesterName) {
+            if (intent !== "evm.rpc.configure") return
+            logos.respond(requestId, true, ({}), "")
+        }
+    }
+
+    // Ask whoever provides verified routing to take over. The note above stays on screen
+    // whatever happens — it is the instruction to follow by hand, and it is the only thing
+    // left if nothing can service this.
+    function operateVerifiedRouting() {
+        root.routingNote = ""
+        logos.request("evm.verified_routing.operate", ({}), function (res) {
+            if (res.ok) return
+            // `cancelled` is the user saying no, not a failure to report back at them.
+            if (res.error === "cancelled") return
+            root.routingNote = res.error === "unavailable"
+                ? "Nothing on this device offers to do that — follow the note above."
+                : "That request did not go through (" + res.error + ")."
+        })
     }
 
     function j(text, fallback) {
@@ -84,8 +111,9 @@ Item {
     }
     onChainChanged: loadForm()
 
-    // The closed set of actions eth_rpc's verdict may carry. Text only, no button: a
-    // sandboxed view has no cross-plugin navigation, so a button to Verified Proxy is dead.
+    // The closed set of actions eth_rpc's verdict may carry. Still the authoritative text:
+    // `operateVerifiedRoutingButton` below raises an intent for the three actions that name
+    // something to go and do, but nothing guarantees a provider exists, so the words stay.
     function actionHint(a) {
         if (a === "wait") return "Waiting for the verified proxy to catch up."
         if (a === "install_or_load") return "Install and start the Verified Proxy module, then reopen this app."
@@ -411,6 +439,25 @@ Item {
                             wrapMode: Text.WordWrap
                             color: Theme.palette.textSecondary
                             text: root.actionHint(root.verdict.action)
+                        }
+                        LogosButton {
+                            objectName: "operateVerifiedRoutingButton"
+                            // `wait` is the one action with nothing to go and do — the proxy
+                            // is already running and catching up.
+                            visible: root.verdict.action !== undefined
+                                     && root.verdict.action.length > 0
+                                     && root.verdict.action !== "wait"
+                            text: "Open Verified Proxy"
+                            onClicked: root.operateVerifiedRouting()
+                        }
+                        LogosText {
+                            objectName: "routingNote"
+                            Layout.fillWidth: true
+                            visible: root.routingNote.length > 0
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            text: root.routingNote
                         }
                         LogosText {
                             objectName: "verdictDetail"
