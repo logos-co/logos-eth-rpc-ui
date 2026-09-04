@@ -11,6 +11,12 @@
   "icon": "src/icons/eth_rpc.png",
   "view": "qml/EthRpcView.qml",
   "dependencies": ["eth_rpc_module"],
+  "provides": [
+    { "intent": "evm.rpc.configure", "handoff": true }
+  ],
+  "uses": [
+    { "intent": "evm.verified_routing.operate", "cardinality": "single" }
+  ],
   "codegen": { "rep": "src/eth_rpc_ui.rep" },
   "nix": {
     "external_libraries": [],
