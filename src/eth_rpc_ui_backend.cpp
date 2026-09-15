@@ -28,30 +28,6 @@ constexpr int kMaxSilentPolls = 3;
 constexpr int kDefaultTimeoutSecs = 8;
 constexpr int kDefaultVerifiedTimeoutSecs = 15;
 
-// Display names only. NOT a security boundary and NOT an allowlist: eth_rpc will configure
-// any chain id, and an id absent from this table renders as "Chain 42161" with no `testnet`
-// claim at all. The wallet's own network allowlist is a different list answering a different
-// question, and is deliberately not imported here.
-struct KnownChain
-{
-    int id;
-    const char *name;
-    bool testnet;
-};
-constexpr KnownChain kKnownChains[] = {
-    {1, "Ethereum", false},
-    {11155111, "Sepolia", true},
-    {560048, "Hoodi", true},
-};
-
-const KnownChain *known(int id)
-{
-    for (const KnownChain &k : kKnownChains)
-        if (k.id == id)
-            return &k;
-    return nullptr;
-}
-
 QJsonObject parseObject(const QString &reply)
 {
     return QJsonDocument::fromJson(reply.toUtf8()).object();
@@ -78,33 +54,40 @@ QString compact(const QJsonArray &a)
     return QString::fromUtf8(QJsonDocument(a).toJson(QJsonDocument::Compact));
 }
 
-/// One `chainsJson` row, flattened from eth_rpc's `{ ok, config }`. A failed read is not an
-/// error here: a chain eth_rpc has no record of is exactly what `configured: false` says.
-QJsonObject chainEntry(int id, const QString &configReply)
+QJsonObject chainEntry(QJsonObject e)
 {
-    const KnownChain *k = known(id);
-    QJsonObject e{
-        {QStringLiteral("chainId"), id},
-        {QStringLiteral("name"), k ? QString::fromLatin1(k->name)
-                                   : QStringLiteral("Chain %1").arg(id)},
-    };
-    // Absent, never false: calling an unrecognised chain "mainnet" is the one wrong answer.
-    if (k)
-        e[QStringLiteral("testnet")] = k->testnet;
-
-    const bool configured = replyOk(configReply);
-    const QJsonObject c = parseObject(configReply).value(QStringLiteral("config")).toObject();
-    e[QStringLiteral("configured")] = configured;
-    e[QStringLiteral("endpoint")] = c.value(QStringLiteral("endpoint")).toString();
-    e[QStringLiteral("proxy")] = c.value(QStringLiteral("proxy")).toString();
-    e[QStringLiteral("proxyRequired")] = c.value(QStringLiteral("proxyRequired")).toBool();
+    const int id = e.value(QStringLiteral("chainId")).toInt();
+    if (e.value(QStringLiteral("name")).toString().isEmpty())
+        e[QStringLiteral("name")] = QStringLiteral("Chain %1").arg(id);
+    e[QStringLiteral("configured")] = true;
+    if (!e.contains(QStringLiteral("enabled")))
+        e[QStringLiteral("enabled")] = true;
+    if (!e.contains(QStringLiteral("inScope")))
+        e[QStringLiteral("inScope")] = false;
     e[QStringLiteral("timeoutSecs")] =
-        c.value(QStringLiteral("timeoutSecs")).toInt(kDefaultTimeoutSecs);
+        e.value(QStringLiteral("timeoutSecs")).toInt(kDefaultTimeoutSecs);
     e[QStringLiteral("verifiedTimeoutSecs")] =
-        c.value(QStringLiteral("verifiedTimeoutSecs")).toInt(kDefaultVerifiedTimeoutSecs);
-    e[QStringLiteral("verifiedProxyMode")] =
-        c.value(QStringLiteral("verifiedProxyMode")).toString(QStringLiteral("off"));
+        e.value(QStringLiteral("verifiedTimeoutSecs")).toInt(kDefaultVerifiedTimeoutSecs);
+    e[QStringLiteral("verifiedProxyMode")] = e.value(QStringLiteral("verifiedProxyMode"))
+                                                   .toString(QStringLiteral("off"));
     return e;
+}
+
+QJsonObject askedEntry(int id)
+{
+    return QJsonObject{
+        {QStringLiteral("chainId"), id},
+        {QStringLiteral("name"), QStringLiteral("Chain %1").arg(id)},
+        {QStringLiteral("configured"), false},
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("inScope"), false},
+        {QStringLiteral("endpoint"), QString()},
+        {QStringLiteral("proxy"), QString()},
+        {QStringLiteral("proxyRequired"), false},
+        {QStringLiteral("timeoutSecs"), kDefaultTimeoutSecs},
+        {QStringLiteral("verifiedTimeoutSecs"), kDefaultVerifiedTimeoutSecs},
+        {QStringLiteral("verifiedProxyMode"), QStringLiteral("off")},
+    };
 }
 
 /// The verdict to publish once eth_rpc has stopped answering. It mirrors the shape eth_rpc
@@ -135,27 +118,6 @@ bool EthRpcUiBackend::failed(const QString &reply, const QString &context)
     return true;
 }
 
-QList<int> EthRpcUiBackend::roster() const
-{
-    QList<int> out;
-    for (const KnownChain &k : kKnownChains)
-        out.append(k.id);
-
-    const QJsonArray configured =
-        parseObject(modules().eth_rpc_module.list_chains()).value(QStringLiteral("chains")).toArray();
-    for (const QJsonValue &v : configured) {
-        // The .rep carries chain ids as int, so an id past 2^31 cannot be selected, edited
-        // or removed from this app. Dropping it is honest; showing an unusable row is not.
-        const qint64 id = v.toInteger(0);
-        if (id > 0 && id <= std::numeric_limits<int>::max() && !out.contains(static_cast<int>(id)))
-            out.append(static_cast<int>(id));
-    }
-    for (int id : m_asked)
-        if (!out.contains(id))
-            out.append(id);
-    return out;
-}
-
 void EthRpcUiBackend::onContextReady()
 {
     m_verdictPoll.setInterval(kVerdictPollMs);
@@ -181,6 +143,9 @@ void EthRpcUiBackend::onContextReady()
     modules().eth_rpc_module.onChain_config_changed([this](int) {
         QTimer::singleShot(0, this, [this] { refresh(); });
     });
+    modules().eth_rpc_module.onNetwork_scope_changed([this](const QString &) {
+        QTimer::singleShot(0, this, [this] { refresh(); });
+    });
 
     refresh();
 }
@@ -190,10 +155,30 @@ void EthRpcUiBackend::refresh()
     setBusy(true);
     setLastError(QString());
 
+    const QString registryReply = modules().eth_rpc_module.list_chain_configs();
+    if (failed(registryReply, QStringLiteral("chain registry"))) {
+        setBusy(false);
+        return;
+    }
+    const QJsonObject registry = parseObject(registryReply);
+    setNetworkScope(registry.value(QStringLiteral("scope")).toString(QStringLiteral("mainnets")));
+
     QJsonArray chains;
     bool kept = false;
-    for (int id : roster()) {
-        chains.append(chainEntry(id, modules().eth_rpc_module.get_chain_config(id)));
+    for (const QJsonValue &value : registry.value(QStringLiteral("chains")).toArray()) {
+        const qint64 wideId = value.toObject().value(QStringLiteral("chainId")).toInteger(0);
+        if (wideId <= 0 || wideId > std::numeric_limits<int>::max())
+            continue;
+        const int id = static_cast<int>(wideId);
+        chains.append(chainEntry(value.toObject()));
+        kept = kept || id == selectedChainId();
+    }
+    for (int id : m_asked) {
+        bool found = false;
+        for (const QJsonValue &value : chains)
+            found = found || value.toObject().value(QStringLiteral("chainId")).toInt() == id;
+        if (!found)
+            chains.append(askedEntry(id));
         kept = kept || id == selectedChainId();
     }
     setChainsJson(compact(chains));
@@ -242,6 +227,40 @@ void EthRpcUiBackend::setEndpoint(int chainId, QString url)
     // Whatever the last test proved, it proved it about a different endpoint.
     setProbeJson(QStringLiteral("{}"));
     refresh();
+}
+
+void EthRpcUiBackend::setChainEnabled(int chainId, bool enabled)
+{
+    setLastError(QString());
+    if (!failed(modules().eth_rpc_module.set_chain_enabled(chainId, enabled),
+                QStringLiteral("network availability")))
+        refresh();
+}
+
+void EthRpcUiBackend::changeNetworkScope(QString scope)
+{
+    setLastError(QString());
+    if (!failed(modules().eth_rpc_module.set_network_scope(scope),
+                QStringLiteral("network scope")))
+        refresh();
+}
+
+void EthRpcUiBackend::setMetadata(int chainId, QString name, QString nativeSymbol,
+                                  int nativeDecimals, int testnet)
+{
+    QJsonObject patch;
+    patch[QStringLiteral("name")] = name.trimmed().isEmpty()
+        ? QJsonValue(QJsonValue::Null) : QJsonValue(name.trimmed());
+    patch[QStringLiteral("nativeSymbol")] = nativeSymbol.trimmed().isEmpty()
+        ? QJsonValue(QJsonValue::Null) : QJsonValue(nativeSymbol.trimmed());
+    patch[QStringLiteral("nativeDecimals")] = nativeDecimals < 0
+        ? QJsonValue(QJsonValue::Null) : QJsonValue(nativeDecimals);
+    patch[QStringLiteral("testnet")] = testnet < 0
+        ? QJsonValue(QJsonValue::Null) : QJsonValue(testnet != 0);
+    setLastError(QString());
+    if (!failed(modules().eth_rpc_module.patch_chain_metadata(chainId, compact(patch)),
+                QStringLiteral("network metadata")))
+        refresh();
 }
 
 void EthRpcUiBackend::setVerifiedProxyMode(int chainId, QString mode)

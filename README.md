@@ -1,7 +1,9 @@
 # logos-eth-rpc-ui
 
-Basecamp panel for [`eth_rpc_module`](https://github.com/logos-co/logos-evm-eth-rpc-module):
-the JSON-RPC endpoint and the light-client verified-routing mode, per chain.
+Basecamp Networks panel for
+[`eth_rpc_module`](https://github.com/logos-co/logos-evm-eth-rpc-module):
+device-wide enabled networks and scope, chain metadata, JSON-RPC endpoints, and
+the light-client verified-routing mode.
 
 A `ui_qml` module — a QML view (`src/qml/EthRpcView.qml`) over a small C++ backend
 (`src/eth_rpc_ui_backend.{h,cpp}`) whose QML-facing surface is the QtRO contract in
@@ -27,14 +29,11 @@ the verified verdict in full — the chip, the banner, the frozen-rows notice �
 
 ## Five decisions worth knowing
 
-**The chain roster is cosmetic.** `list_chains` returns only *configured* chains, so a fresh
-device offers nothing. This app carries its own display-name table (Ethereum, Sepolia, Hoodi)
-and merges it with whatever eth_rpc holds plus whatever the user types into "Add chain by id".
-That table is **not** an allowlist and not a security boundary: eth_rpc will configure any
-chain id, and an id with no name renders as `Chain 42161` with no `testnet` claim at all —
-absent, never `false`, because calling an unrecognised chain "mainnet" is the one wrong answer.
-The wallet's `networks::ALL` is deliberately *not* imported: that is the wallet's allowlist and
-it answers a different question.
+**The chain roster belongs to eth_rpc.** `list_chain_configs` supplies the names,
+native-asset metadata, enabled state, `inScope` decision, and mainnet/testnet
+classification. This app holds no parallel chain table. A custom chain with no
+classification stays unknown and enters the effective set only under scope `both`.
+The editor can patch those metadata fields without replacing transport settings.
 
 **The config is pushed; only the verdict is polled.** This app is a viewer of a store it does
 not own — `eth_wallet_backend` seeds chains through `init_defaults` and `seed_chain_config`,
@@ -52,7 +51,7 @@ to "could not be read" rather than leaving a stale `ready` on screen while nothi
 
 **`verified_proxy_status` and `verify_chain_id` are asynchronous; the config calls are not.**
 Both of those spend real budgets and this backend runs on the GUI thread. `get_chain_config`,
-`list_chains`, `patch_*` and `remove_chain_config` are in-memory reads and a file write, so
+`list_chain_configs`, `patch_*` and `remove_chain_config` are in-memory reads and a file write, so
 they stay synchronous. The async guard is a *deadline* (`InFlight`), never a latch — a callback
 that never fires must not wedge the probe shut for good.
 
