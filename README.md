@@ -31,7 +31,9 @@ the verified verdict in full â€” the chip, the banner, the frozen-rows notice â€
 
 **The chain roster belongs to eth_rpc.** `list_chain_configs` supplies the names,
 native-asset metadata, enabled state, `inScope` decision, and mainnet/testnet
-classification. This app holds no parallel chain table. A custom chain with no
+classification. This app holds no parallel chain table; it calls `init_defaults` on start, as
+the wallet does, so a device with no wallet yet still lists Ethereum, Sepolia and Hoodi. That
+call is idempotent and never brings back a built-in chain the user removed. A custom chain with no
 classification stays unknown and enters the effective set only under scope `both`.
 The editor can patch those metadata fields without replacing transport settings.
 

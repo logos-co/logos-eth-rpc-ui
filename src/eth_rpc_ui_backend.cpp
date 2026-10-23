@@ -147,6 +147,9 @@ void EthRpcUiBackend::onContextReady()
         QTimer::singleShot(0, this, [this] { refresh(); });
     });
 
+    // The roster is eth_rpc's, so a device with no wallet seeding it yet would list nothing.
+    // Idempotent, and a built-in chain the user removed stays removed.
+    modules().eth_rpc_module.init_defaults();
     refresh();
 }
 
