@@ -1,7 +1,7 @@
 {
   "name": "eth_rpc_ui",
   "display_name": "Ethereum RPC",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "ui_qml",
   "interface": "universal",
   "category": "wallet",
