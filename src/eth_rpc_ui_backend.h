@@ -53,6 +53,10 @@ public:
     void refresh() override;
     void selectChain(int chainId) override;
     void setEndpoint(int chainId, QString url) override;
+    void setChainEnabled(int chainId, bool enabled) override;
+    void changeNetworkScope(QString scope) override;
+    void setMetadata(int chainId, QString name, QString nativeSymbol,
+                     int nativeDecimals, int testnet) override;
     void setVerifiedProxyMode(int chainId, QString mode) override;
     void setTimeouts(int chainId, int timeoutSecs, int verifiedTimeoutSecs) override;
     void removeChain(int chainId) override;
@@ -66,10 +70,6 @@ private:
     /// Surface an eth_rpc refusal verbatim. The rule that produced it lives there, so
     /// restating it here would be a second copy free to drift.
     bool failed(const QString &reply, const QString &context);
-
-    /// Every chain this app offers, in a stable order: the display roster, then every chain
-    /// eth_rpc holds a config for, then every id the user has asked about this session.
-    QList<int> roster() const;
 
     /// Publish a verdict, or count a poll that learned nothing. A single unanswered probe
     /// must not repaint the badge; a backend that has gone quiet must not leave "ready" on

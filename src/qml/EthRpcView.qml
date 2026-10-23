@@ -78,12 +78,16 @@ Item {
     }
 
     readonly property var chains: ready ? j(backend.chainsJson, "[]") : []
+    readonly property string networkScope: ready ? backend.networkScope : "mainnets"
+    readonly property var mainnetChains: chains.filter(function(c) { return c.testnet === false })
+    readonly property var testnetChains: chains.filter(function(c) { return c.testnet === true })
+    readonly property var unknownChains: chains.filter(function(c) { return c.testnet === undefined })
     readonly property int selectedChainId: ready ? backend.selectedChainId : 0
     readonly property var verdict: ready ? j(backend.verdictJson, "{}") : ({})
     readonly property var probe: ready ? j(backend.probeJson, "{}") : ({})
 
     function chainById(id) {
-        for (var i = 0; i < chains.length; ++i)
+        for (let i = 0; i < chains.length; ++i)
             if (chains[i].chainId === id) return chains[i]
         return null
     }
@@ -91,7 +95,7 @@ Item {
     // been removed — every control checks it rather than reading through a null.
     readonly property var chain: chainById(selectedChainId)
     readonly property int chainIndex: {
-        for (var i = 0; i < chains.length; ++i)
+        for (let i = 0; i < chains.length; ++i)
             if (chains[i].chainId === selectedChainId) return i
         return 0
     }
@@ -100,11 +104,23 @@ Item {
         return c.name + " · " + c.chainId + (c.configured ? "" : " · not configured")
     }
 
+    function scopeIndex(scope) {
+        if (scope === "testnets") return 1
+        if (scope === "both") return 2
+        return 0
+    }
+
     // The form holds the user's edits, so it is filled imperatively when the chain changes
     // rather than bound: a binding on `text` is destroyed by the first keystroke, and would
     // then never follow a chain switch.
     function loadForm() {
         endpointField.text = chain ? chain.endpoint : ""
+        nameField.text = chain && chain.name !== undefined ? chain.name : ""
+        symbolField.text = chain && chain.nativeSymbol !== undefined ? chain.nativeSymbol : ""
+        decimalsField.value = chain && chain.nativeDecimals !== undefined
+            ? chain.nativeDecimals : 18
+        networkKindPicker.currentIndex = !chain || chain.testnet === undefined
+            ? 0 : chain.testnet === true ? 2 : 1
         timeoutField.value = chain ? chain.timeoutSecs : 8
         verifiedTimeoutField.value = chain ? chain.verifiedTimeoutSecs : 15
         root.addChainError = ""
@@ -191,6 +207,123 @@ Item {
             font.pixelSize: Theme.typography.secondaryText
             text: "These endpoints are stored once for this device and are used by every "
                 + "Logos wallet on it. Changing one here changes it for all of them."
+        }
+
+        LogosFrame {
+            Layout.fillWidth: true
+            contentItem: ColumnLayout {
+                spacing: Theme.spacing.small
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    LogosText {
+                        text: "Enabled networks"
+                        color: Theme.palette.text
+                        font.weight: Theme.typography.weightBold
+                    }
+                    Item { Layout.fillWidth: true }
+                    LogosText { text: "Scope"; color: Theme.palette.textSecondary }
+                    LogosComboBox {
+                        id: scopePicker
+                        objectName: "networkScopePicker"
+                        model: ["Mainnets", "Testnets", "Both"]
+                        onActivated: if (root.ready)
+                            root.backend.changeNetworkScope(
+                                currentIndex === 1 ? "testnets" : currentIndex === 2 ? "both" : "mainnets")
+                    }
+                    Binding {
+                        target: scopePicker
+                        property: "currentIndex"
+                        value: root.scopeIndex(root.networkScope)
+                        restoreMode: Binding.RestoreNone
+                    }
+                }
+
+                LogosText { text: "Mainnets"; color: Theme.palette.textSecondary }
+                Repeater {
+                    model: root.mainnetChains
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: modelData.name + " · " + modelData.chainId
+                            color: Theme.palette.text
+                            textFormat: Text.PlainText
+                        }
+                        LogosSwitch {
+                            id: mainnetEnabledSwitch
+                            objectName: "chainEnabled_" + modelData.chainId
+                            text: modelData.inScope === true ? "Enabled · in scope" : "Enabled"
+                            onToggled: root.backend.setChainEnabled(modelData.chainId, checked)
+                        }
+                        Binding {
+                            target: mainnetEnabledSwitch
+                            property: "checked"
+                            value: modelData.enabled === true
+                            restoreMode: Binding.RestoreNone
+                        }
+                    }
+                }
+
+                LogosText { text: "Testnets"; color: Theme.palette.textSecondary }
+                Repeater {
+                    model: root.testnetChains
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: modelData.name + " · " + modelData.chainId
+                            color: Theme.palette.text
+                            textFormat: Text.PlainText
+                        }
+                        LogosSwitch {
+                            id: testnetEnabledSwitch
+                            objectName: "chainEnabled_" + modelData.chainId
+                            text: modelData.inScope === true ? "Enabled · in scope" : "Enabled"
+                            onToggled: root.backend.setChainEnabled(modelData.chainId, checked)
+                        }
+                        Binding {
+                            target: testnetEnabledSwitch
+                            property: "checked"
+                            value: modelData.enabled === true
+                            restoreMode: Binding.RestoreNone
+                        }
+                    }
+                }
+
+                LogosText {
+                    visible: root.unknownChains.length > 0
+                    text: "Unknown network kind"
+                    color: Theme.palette.warning
+                }
+                Repeater {
+                    model: root.unknownChains
+                    delegate: RowLayout {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        LogosText {
+                            Layout.fillWidth: true
+                            text: modelData.name + " · " + modelData.chainId
+                            color: Theme.palette.text
+                            textFormat: Text.PlainText
+                        }
+                        LogosSwitch {
+                            id: unknownEnabledSwitch
+                            objectName: "chainEnabled_" + modelData.chainId
+                            text: modelData.inScope === true ? "Enabled · in scope" : "Enabled"
+                            onToggled: root.backend.setChainEnabled(modelData.chainId, checked)
+                        }
+                        Binding {
+                            target: unknownEnabledSwitch
+                            property: "checked"
+                            value: modelData.enabled === true
+                            restoreMode: Binding.RestoreNone
+                        }
+                    }
+                }
+            }
         }
 
         LogosText {
@@ -305,6 +438,51 @@ Item {
                         font.pixelSize: Theme.typography.secondaryText
                         text: root.chain && root.chain.configured
                               ? "Configured" : "Not configured yet — the values below are defaults."
+                    }
+                }
+
+                LogosFrame {
+                    Layout.fillWidth: true
+                    contentItem: ColumnLayout {
+                        spacing: Theme.spacing.small
+                        LogosText { text: "Network metadata"; color: Theme.palette.textSecondary }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            LogosTextField {
+                                id: nameField
+                                objectName: "networkNameField"
+                                Layout.fillWidth: true
+                                placeholderText: "Network name"
+                            }
+                            LogosTextField {
+                                id: symbolField
+                                objectName: "nativeSymbolField"
+                                Layout.preferredWidth: 130
+                                placeholderText: "Symbol"
+                            }
+                            LogosSpinBox {
+                                id: decimalsField
+                                objectName: "nativeDecimalsField"
+                                from: 0
+                                to: 255
+                                value: 18
+                            }
+                            LogosComboBox {
+                                id: networkKindPicker
+                                objectName: "networkKindPicker"
+                                model: ["Unknown", "Mainnet", "Testnet"]
+                            }
+                            LogosButton {
+                                objectName: "saveMetadataButton"
+                                text: "Save metadata"
+                                enabled: root.ready && root.chain && root.chain.configured
+                                onClicked: root.backend.setMetadata(
+                                    root.selectedChainId, nameField.text, symbolField.text,
+                                    decimalsField.value,
+                                    networkKindPicker.currentIndex === 0
+                                        ? -1 : networkKindPicker.currentIndex === 2 ? 1 : 0)
+                            }
+                        }
                     }
                 }
 
