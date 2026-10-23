@@ -87,7 +87,7 @@ Item {
     readonly property var probe: ready ? j(backend.probeJson, "{}") : ({})
 
     function chainById(id) {
-        for (var i = 0; i < chains.length; ++i)
+        for (let i = 0; i < chains.length; ++i)
             if (chains[i].chainId === id) return chains[i]
         return null
     }
@@ -95,7 +95,7 @@ Item {
     // been removed — every control checks it rather than reading through a null.
     readonly property var chain: chainById(selectedChainId)
     readonly property int chainIndex: {
-        for (var i = 0; i < chains.length; ++i)
+        for (let i = 0; i < chains.length; ++i)
             if (chains[i].chainId === selectedChainId) return i
         return 0
     }
