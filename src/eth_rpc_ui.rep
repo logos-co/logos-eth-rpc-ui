@@ -28,6 +28,19 @@ class EthRpcUi
     // Empty until something has been tested.
     PROP(QString probeJson="{}" READONLY)
 
+    // beacon_api_module's record for the SELECTED chain:
+    // { chainId, configured, proxy, proxyRequired, timeoutSecs, error?,
+    //   providers: [{ id, endpoint, enabled, source, https,
+    //                 health: { served, failures, lastError, lastLatencyMs, ... } }] }
+    // `configured` false means beacon_api has no record for the chain; `error` that it could
+    // not be read at all.
+    PROP(QString beaconJson="{}" READONLY)
+
+    // The last beacon provider test, beacon_api's provider_health reply plus { chainId,
+    // provider, pending? }: { ok, servesLightClient?, healthy?, slot?, lagSlots?, latencyMs?,
+    // error? }. Empty until something has been tested.
+    PROP(QString beaconProbeJson="{}" READONLY)
+
     SLOT(void refresh())
     SLOT(void selectChain(int chainId))
     // Overwrites ONLY the endpoint. The store is shared, so a user retyping a URL must not
@@ -45,4 +58,14 @@ class EthRpcUi
     // full transport timeout.
     SLOT(void testEndpoint(int chainId))
     SLOT(void refreshVerdict())
+
+    SLOT(void refreshBeacon())
+    // An empty `id` lets beacon_api derive one from the host.
+    SLOT(void addBeaconProvider(int chainId, QString endpoint, QString id))
+    SLOT(void setBeaconProviderEnabled(int chainId, QString id, bool enabled))
+    SLOT(void removeBeaconProvider(int chainId, QString id))
+    // A live light-client fetch. Async: it can take the chain's whole beacon timeout.
+    SLOT(void testBeaconProvider(int chainId, QString id))
+    // Writes all three. An empty proxy clears it.
+    SLOT(void setBeaconTransport(int chainId, QString proxy, bool proxyRequired, int timeoutSecs))
 }

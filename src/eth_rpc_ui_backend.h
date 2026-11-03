@@ -63,13 +63,24 @@ public:
     void testEndpoint(int chainId) override;
     void refreshVerdict() override;
 
+    // Beacon (consensus-layer) providers, stored per chain by beacon_api_module. The verified
+    // proxy reads the enabled ones' URLs from there when it starts.
+    void refreshBeacon() override;
+    void addBeaconProvider(int chainId, QString endpoint, QString id) override;
+    void setBeaconProviderEnabled(int chainId, QString id, bool enabled) override;
+    void removeBeaconProvider(int chainId, QString id) override;
+    void testBeaconProvider(int chainId, QString id) override;
+    void setBeaconTransport(int chainId, QString proxy, bool proxyRequired,
+                            int timeoutSecs) override;
+
 protected:
     void onContextReady() override;
 
 private:
-    /// Surface an eth_rpc refusal verbatim. The rule that produced it lives there, so
+    /// Surface a module's refusal verbatim. The rule that produced it lives there, so
     /// restating it here would be a second copy free to drift.
-    bool failed(const QString &reply, const QString &context);
+    bool failed(const QString &reply, const QString &context,
+                const QString &module = QStringLiteral("eth_rpc"));
 
     /// Publish a verdict, or count a poll that learned nothing. A single unanswered probe
     /// must not repaint the badge; a backend that has gone quiet must not leave "ready" on
@@ -87,6 +98,8 @@ private:
     InFlight m_verdictInFlight;
     /// One endpoint test at a time — a dead endpoint costs the full transport timeout.
     InFlight m_probeInFlight;
+    /// One beacon provider test at a time, for the same reason.
+    InFlight m_beaconProbeInFlight;
     /// Verdict polls in a row that learned nothing.
     int m_verdictSilent = 0;
 };

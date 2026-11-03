@@ -43,6 +43,12 @@ Item {
     // screen is not the one they are looking at.
     property string routingNote: ""
 
+    // The beacon provider the removal dialog is asking about.
+    property string beaconRemoveId: ""
+    // The endpoint just asked for, as beacon_api will store it. The add form is cleared once it
+    // is listed; a refusal leaves the form as typed, next to the error.
+    property string beaconAddPending: ""
+
     Connections {
         target: logos
         function onViewModuleReadyChanged(moduleName, isReady) {
@@ -85,6 +91,24 @@ Item {
     readonly property int selectedChainId: ready ? backend.selectedChainId : 0
     readonly property var verdict: ready ? j(backend.verdictJson, "{}") : ({})
     readonly property var probe: ready ? j(backend.probeJson, "{}") : ({})
+    readonly property var beacon: ready ? j(backend.beaconJson, "{}") : ({})
+    readonly property var beaconProbe: ready ? j(backend.beaconProbeJson, "{}") : ({})
+    // Read for the SELECTED chain only once the backend says so; until then it is the last one's.
+    readonly property bool beaconLoaded: beacon.chainId !== undefined
+                                         && beacon.chainId === selectedChainId
+    readonly property var beaconProviders: beaconLoaded && beacon.providers !== undefined
+                                           ? beacon.providers : []
+    readonly property int beaconEnabledCount:
+        beaconProviders.filter(function (p) { return p.enabled === true }).length
+    // The verified proxy's own test (vp#21's beaconUrlsFromModule): a proxy set, or one required.
+    readonly property bool beaconProxied: beaconLoaded
+        && (beacon.proxyRequired === true || (beacon.proxy !== undefined && beacon.proxy.length > 0))
+    // Edits go through the same "save an endpoint first" gate as the rest of the form.
+    readonly property bool beaconEditable: ready && chain !== null && chain.configured === true
+                                           && beaconLoaded && beacon.error === undefined
+    // Moves only when the STORED transport does, so a health refresh does not wipe an edit.
+    readonly property string beaconTransportKey: beaconLoaded
+        ? [beacon.chainId, beacon.proxy, beacon.proxyRequired, beacon.timeoutSecs].join("|") : ""
 
     function chainById(id) {
         for (let i = 0; i < chains.length; ++i)
@@ -126,6 +150,60 @@ Item {
         root.addChainError = ""
     }
     onChainChanged: loadForm()
+
+    function loadBeaconForm() {
+        beaconProxyField.text = beaconLoaded && beacon.proxy !== undefined ? beacon.proxy : ""
+        beaconProxyRequiredSwitch.checked = beaconLoaded && beacon.proxyRequired === true
+        beaconTimeoutField.value = beaconLoaded && beacon.timeoutSecs !== undefined
+            ? beacon.timeoutSecs : 15
+    }
+    onBeaconTransportKeyChanged: loadBeaconForm()
+    onSelectedChainIdChanged: {
+        beaconEndpointField.text = ""
+        beaconIdField.text = ""
+        root.beaconAddPending = ""
+    }
+    onBeaconProvidersChanged: {
+        if (root.beaconAddPending.length === 0) return
+        for (let i = 0; i < beaconProviders.length; ++i) {
+            if (beaconProviders[i].endpoint !== root.beaconAddPending) continue
+            beaconEndpointField.text = ""
+            beaconIdField.text = ""
+            root.beaconAddPending = ""
+            return
+        }
+    }
+
+    // A provider's record since beacon_api last started; it keeps none across restarts.
+    function beaconHealthText(h) {
+        if (h === undefined || h === null) return ""
+        if (h.served === 0 && h.failures === 0) return "No requests yet since beacon_api started."
+        let s = "Served " + h.served + " · failed " + h.failures
+        if (h.served > 0) s += " · last latency " + h.lastLatencyMs + " ms"
+        return s
+    }
+
+    // What the last provider_health check found. `ok` only says the check ran.
+    function beaconProbeText(p) {
+        if (p.pending === true) return "Testing…"
+        if (p.ok === undefined) return ""
+        if (p.ok !== true) return "Test failed: " + (p.error || "")
+        // Unreachable and "answers, but not the light-client API" both land here.
+        if (p.servesLightClient !== true)
+            return "No light-client update from this provider: " + (p.error || "")
+        const behind = p.lagSlots === undefined || p.lagSlots === null
+            ? "" : ", " + p.lagSlots + " slots behind the clock"
+        if (p.healthy !== true)
+            return "Serves the light-client API, but is stale: " + (p.error || "") + "."
+        return "Serves the light-client API: slot " + p.slot + behind
+             + " (" + p.latencyMs + " ms)."
+    }
+    function beaconProbeColor(p) {
+        if (p.pending === true) return Theme.palette.textSecondary
+        if (p.ok === true && p.healthy === true) return Theme.palette.success
+        if (p.ok === true && p.servesLightClient === true) return Theme.palette.warning
+        return Theme.palette.error
+    }
 
     // The closed set of actions eth_rpc's verdict may carry. Still the authoritative text:
     // `operateVerifiedRoutingButton` below raises an intent for the three actions that name
@@ -665,6 +743,295 @@ Item {
                     }
                 }
 
+                // ── beacon (consensus-layer) providers ────────────────────────────────
+                LogosFrame {
+                    objectName: "beaconSection"
+                    Layout.fillWidth: true
+                    contentItem: ColumnLayout {
+                        spacing: Theme.spacing.small
+
+                        LogosText {
+                            text: "Beacon (consensus-layer) providers"
+                            color: Theme.palette.textSecondary
+                        }
+
+                        LogosText {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "The Beacon API providers the light client follows this chain "
+                                + "through. Like the endpoints, they are stored once for this "
+                                + "device, by beacon_api_module."
+                        }
+
+                        LogosText {
+                            objectName: "beaconTrustNote"
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "Plain http is acceptable here, unlike for the JSON-RPC endpoint: "
+                                + "the light client checks the sync-committee signatures on what "
+                                + "these providers send, so a provider can withhold data but "
+                                + "cannot forge it."
+                        }
+
+                        LogosText {
+                            objectName: "beaconNotConfigured"
+                            Layout.fillWidth: true
+                            visible: root.chain !== null && !root.chain.configured
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "Save an endpoint first: this app edits beacon providers only "
+                                + "for a chain it has a configuration for."
+                        }
+
+                        LogosText {
+                            objectName: "beaconReadError"
+                            Layout.fillWidth: true
+                            visible: root.beaconLoaded && root.beacon.error !== undefined
+                            // beacon_api's own words.
+                            textFormat: Text.PlainText
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.error
+                            text: "The beacon providers could not be read: "
+                                + (root.beacon.error !== undefined ? root.beacon.error : "")
+                        }
+
+                        LogosText {
+                            objectName: "beaconEmptyNote"
+                            Layout.fillWidth: true
+                            visible: root.beaconLoaded && root.beacon.error === undefined
+                                     && root.beaconProviders.length === 0
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            text: "No beacon providers for this chain."
+                        }
+
+                        Repeater {
+                            model: root.beaconProviders
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                spacing: 2
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Theme.spacing.small
+                                    LogosText {
+                                        objectName: "beaconProviderLabel_" + modelData.id
+                                        // preferredWidth 1 + elide: a long endpoint must not
+                                        // widen the row past the frame.
+                                        Layout.fillWidth: true
+                                        Layout.preferredWidth: 1
+                                        elide: Text.ElideRight
+                                        textFormat: Text.PlainText
+                                        color: modelData.enabled === true
+                                               ? Theme.palette.text : Theme.palette.textTertiary
+                                        text: modelData.id + " · " + modelData.endpoint
+                                    }
+                                    LogosBadge {
+                                        visible: modelData.https !== true
+                                        text: "HTTP"
+                                        color: Theme.palette.textTertiary
+                                    }
+                                    LogosBadge {
+                                        visible: modelData.source === "default"
+                                        text: "BUILT-IN"
+                                        color: Theme.palette.textTertiary
+                                    }
+                                    LogosSwitch {
+                                        id: beaconEnabledSwitch
+                                        objectName: "beaconProviderEnabled_" + modelData.id
+                                        text: "Enabled"
+                                        enabled: root.beaconEditable
+                                        onToggled: root.backend.setBeaconProviderEnabled(
+                                                       root.selectedChainId, modelData.id, checked)
+                                    }
+                                    // A refused toggle must snap back, as the routing switch does.
+                                    Binding {
+                                        target: beaconEnabledSwitch
+                                        property: "checked"
+                                        value: modelData.enabled === true
+                                        restoreMode: Binding.RestoreNone
+                                    }
+                                    LogosButton {
+                                        objectName: "beaconProviderTest_" + modelData.id
+                                        text: "Test"
+                                        enabled: root.ready
+                                        onClicked: root.backend.testBeaconProvider(
+                                                       root.selectedChainId, modelData.id)
+                                    }
+                                    LogosButton {
+                                        objectName: "beaconProviderRemove_" + modelData.id
+                                        text: "Remove"
+                                        enabled: root.beaconEditable
+                                        onClicked: {
+                                            root.beaconRemoveId = modelData.id
+                                            removeBeaconProviderDialog.open()
+                                        }
+                                    }
+                                }
+
+                                LogosText {
+                                    objectName: "beaconProviderHealth_" + modelData.id
+                                    Layout.fillWidth: true
+                                    visible: text.length > 0
+                                    wrapMode: Text.WordWrap
+                                    color: Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.secondaryText
+                                    text: root.beaconHealthText(modelData.health)
+                                }
+                                LogosText {
+                                    objectName: "beaconProviderLastError_" + modelData.id
+                                    Layout.fillWidth: true
+                                    visible: modelData.health !== undefined
+                                             && modelData.health.lastError.length > 0
+                                    // A transport error from beacon_api; may contain anything.
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.WordWrap
+                                    // Kept after a later success, so red only while failing.
+                                    color: modelData.health !== undefined
+                                           && modelData.health.consecutiveFailures > 0
+                                           ? Theme.palette.error : Theme.palette.textTertiary
+                                    font.pixelSize: Theme.typography.secondaryText
+                                    text: modelData.health !== undefined
+                                          ? "Last error: " + modelData.health.lastError : ""
+                                }
+                                LogosText {
+                                    objectName: "beaconProviderProbe_" + modelData.id
+                                    Layout.fillWidth: true
+                                    visible: root.beaconProbe.chainId === root.selectedChainId
+                                             && root.beaconProbe.provider === modelData.id
+                                             && text.length > 0
+                                    textFormat: Text.PlainText
+                                    wrapMode: Text.WordWrap
+                                    color: root.beaconProbeColor(root.beaconProbe)
+                                    text: root.beaconProbeText(root.beaconProbe)
+                                }
+                            }
+                        }
+
+                        LogosText {
+                            objectName: "beaconNoneEnabled"
+                            Layout.fillWidth: true
+                            visible: root.beaconLoaded && root.beacon.error === undefined
+                                     && root.beaconEnabledCount === 0
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.warning
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "No provider is enabled, so the verified proxy cannot start on "
+                                + "this chain."
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.spacing.small
+                            LogosTextField {
+                                id: beaconEndpointField
+                                objectName: "beaconEndpointField"
+                                Layout.fillWidth: true
+                                placeholderText: "Beacon API endpoint, https://… or http://…"
+                            }
+                            LogosTextField {
+                                id: beaconIdField
+                                objectName: "beaconIdField"
+                                Layout.preferredWidth: 160
+                                placeholderText: "Id (optional)"
+                            }
+                            LogosButton {
+                                objectName: "addBeaconProviderButton"
+                                text: "Add provider"
+                                enabled: root.beaconEditable
+                                onClicked: {
+                                    // beacon_api stores it trimmed, without trailing slashes.
+                                    root.beaconAddPending =
+                                        beaconEndpointField.text.trim().replace(/\/+$/, "")
+                                    root.backend.addBeaconProvider(root.selectedChainId,
+                                                                   beaconEndpointField.text,
+                                                                   beaconIdField.text)
+                                }
+                            }
+                        }
+
+                        // ── beacon_api's transport ────────────────────────────────────
+                        LogosText {
+                            text: "Beacon transport"
+                            color: Theme.palette.textSecondary
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.spacing.small
+                            LogosTextField {
+                                id: beaconProxyField
+                                objectName: "beaconProxyField"
+                                Layout.fillWidth: true
+                                placeholderText: "Proxy, e.g. socks5h://127.0.0.1:9050 (empty: none)"
+                            }
+                            LogosSwitch {
+                                id: beaconProxyRequiredSwitch
+                                objectName: "beaconProxyRequiredSwitch"
+                                text: "Require a proxy"
+                            }
+                        }
+                        RowLayout {
+                            spacing: Theme.spacing.small
+                            LogosText { text: "Timeout (seconds)"; color: Theme.palette.textSecondary }
+                            LogosSpinBox {
+                                id: beaconTimeoutField
+                                objectName: "beaconTimeoutField"
+                                from: 1
+                                to: 120
+                                value: 15
+                            }
+                            LogosButton {
+                                objectName: "saveBeaconTransportButton"
+                                text: "Save beacon transport"
+                                enabled: root.beaconEditable
+                                onClicked: root.backend.setBeaconTransport(
+                                    root.selectedChainId, beaconProxyField.text,
+                                    beaconProxyRequiredSwitch.checked, beaconTimeoutField.value)
+                            }
+                        }
+
+                        LogosText {
+                            objectName: "beaconProxyRequiredNote"
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "With \"Require a proxy\" on, beacon_api refuses to send a "
+                                + "request in the clear when no proxy is set."
+                        }
+
+                        LogosText {
+                            objectName: "beaconVerifiedProxyNote"
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.textSecondary
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "The verified proxy reads the enabled providers' URLs when it "
+                                + "starts and fetches from them itself. So a change here applies "
+                                + "the next time it starts, beacon_api's failover and these proxy "
+                                + "settings do not apply to it, and it refuses to start on a "
+                                + "chain set to go through a proxy."
+                        }
+
+                        LogosText {
+                            objectName: "beaconProxiedWarning"
+                            Layout.fillWidth: true
+                            visible: root.beaconProxied
+                            wrapMode: Text.WordWrap
+                            color: Theme.palette.warning
+                            font.pixelSize: Theme.typography.secondaryText
+                            text: "This chain is set to go through a proxy, so the verified proxy "
+                                + "will refuse to start on it."
+                        }
+                    }
+                }
+
                 // ── transport timeouts ────────────────────────────────────────────────
                 LogosFrame {
                     Layout.fillWidth: true
@@ -746,6 +1113,36 @@ Item {
                 onClicked: {
                     root.backend.removeChain(root.selectedChainId)
                     removeChainDialog.close()
+                }
+            }
+        ]
+    }
+
+    LogosWarningDialog {
+        id: removeBeaconProviderDialog
+        objectName: "removeBeaconProviderDialog"
+        anchors.centerIn: parent
+        width: Math.min(parent.width - 40, 460)
+        accentColor: Theme.palette.error
+        title: "Remove this beacon provider?"
+        message: "\"" + root.beaconRemoveId + "\" goes for every app on this device, not just "
+               + "this one. A built-in provider removed here is not added back later; disable "
+               + "it instead to keep it."
+
+        leftActions: [
+            LogosButton {
+                objectName: "removeBeaconProviderCancel"
+                text: "Cancel"
+                onClicked: removeBeaconProviderDialog.close()
+            }
+        ]
+        rightActions: [
+            LogosButton {
+                objectName: "removeBeaconProviderConfirm"
+                text: "Remove"
+                onClicked: {
+                    root.backend.removeBeaconProvider(root.selectedChainId, root.beaconRemoveId)
+                    removeBeaconProviderDialog.close()
                 }
             }
         ]

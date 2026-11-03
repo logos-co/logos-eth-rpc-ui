@@ -1,5 +1,25 @@
 {
   "nodes": {
+    "beacon_api_module": {
+      "inputs": {
+        "logos-module-builder": [
+          "logos-module-builder"
+        ]
+      },
+      "locked": {
+        "lastModified": 1793665602,
+        "narHash": "sha256-Sh6zEWYkKwoWtmpZcZo9TjtjEOt1Taesux8HMPB0Wi0=",
+        "owner": "logos-co",
+        "repo": "logos-evm-beacon-api-module",
+        "rev": "18c2a731c4f788d30b08104cd9a17fad7662c757",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-co",
+        "repo": "logos-evm-beacon-api-module",
+        "type": "github"
+      }
+    },
     "default-container": {
       "inputs": {
         "logos-container": "logos-container",
@@ -18005,6 +18025,7 @@
     },
     "root": {
       "inputs": {
+        "beacon_api_module": "beacon_api_module",
         "eth_rpc_module": "eth_rpc_module",
         "logos-module-builder": "logos-module-builder"
       }
