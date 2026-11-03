@@ -27,6 +27,11 @@ constexpr int kMaxSilentPolls = 3;
 // boxes cannot tell the user what the value would be.
 constexpr int kDefaultTimeoutSecs = 8;
 constexpr int kDefaultVerifiedTimeoutSecs = 15;
+// beacon_api's own default (its rust-lib/src/beacon.rs default_timeout), the same compromise.
+constexpr int kDefaultBeaconTimeoutSecs = 15;
+// A beacon test is bounded by the chain's own beacon timeout, which may be up to 120 s. The
+// call waits for that plus this, rather than reporting a slow answer as none.
+constexpr int kBeaconTestMarginMs = 5000;
 
 QJsonObject parseObject(const QString &reply)
 {
@@ -38,10 +43,10 @@ bool replyOk(const QString &reply)
     return parseObject(reply).value(QStringLiteral("ok")).toBool();
 }
 
-QString replyError(const QString &reply)
+QString replyError(const QString &reply, const QString &module = QStringLiteral("eth_rpc"))
 {
     const QString e = parseObject(reply).value(QStringLiteral("error")).toString();
-    return e.isEmpty() ? QStringLiteral("eth_rpc refused the request") : e;
+    return e.isEmpty() ? QStringLiteral("%1 refused the request").arg(module) : e;
 }
 
 QString compact(const QJsonObject &o)
@@ -109,12 +114,13 @@ QString unreadableVerdict(int chainId)
 
 } // namespace
 
-bool EthRpcUiBackend::failed(const QString &reply, const QString &context)
+bool EthRpcUiBackend::failed(const QString &reply, const QString &context,
+                             const QString &module)
 {
     if (replyOk(reply))
         return false;
-    setLastError(context.isEmpty() ? replyError(reply)
-                                   : QStringLiteral("%1: %2").arg(context, replyError(reply)));
+    const QString error = replyError(reply, module);
+    setLastError(context.isEmpty() ? error : QStringLiteral("%1: %2").arg(context, error));
     return true;
 }
 
@@ -146,10 +152,20 @@ void EthRpcUiBackend::onContextReady()
     modules().eth_rpc_module.onNetwork_scope_changed([this](const QString &) {
         QTimer::singleShot(0, this, [this] { refresh(); });
     });
+    // The beacon providers have their own store and their own event; only the selected
+    // chain's are on screen.
+    modules().beacon_api_module.onBeacon_config_changed([this](int chainId) {
+        QTimer::singleShot(0, this, [this, chainId] {
+            if (chainId == selectedChainId())
+                refreshBeacon();
+        });
+    });
 
     // The roster is eth_rpc's, so a device with no wallet seeding it yet would list nothing.
     // Idempotent, and a built-in chain the user removed stays removed.
     modules().eth_rpc_module.init_defaults();
+    // Likewise for the beacon providers: a removed default stays removed.
+    modules().beacon_api_module.init_defaults();
     refresh();
 }
 
@@ -195,6 +211,7 @@ void EthRpcUiBackend::refresh()
 
     setStatusText(QStringLiteral("Ready"));
     setBusy(false);
+    refreshBeacon();
     refreshVerdict();
 }
 
@@ -206,6 +223,7 @@ void EthRpcUiBackend::selectChain(int chainId)
         // A verdict and a probe read for the previous chain say nothing about this one.
         setVerdictJson(QStringLiteral("{}"));
         setProbeJson(QStringLiteral("{}"));
+        setBeaconProbeJson(QStringLiteral("{}"));
         m_verdictSilent = 0;
     }
     setSelectedChainId(chainId);
@@ -302,6 +320,7 @@ void EthRpcUiBackend::removeChain(int chainId)
     // Drop the user's ask too, or a chain removed here reappears as an empty row forever.
     m_asked.removeAll(chainId);
     setProbeJson(QStringLiteral("{}"));
+    setBeaconProbeJson(QStringLiteral("{}"));
     setVerdictJson(QStringLiteral("{}"));
     m_verdictSilent = 0;
     refresh();
@@ -379,4 +398,136 @@ void EthRpcUiBackend::applyVerdict(const QString &verdictJson, int chainId)
         m_verdictSilent = 0;
     }
     setVerdictJson(publish);
+}
+
+void EthRpcUiBackend::refreshBeacon()
+{
+    const int chain = selectedChainId();
+    if (chain <= 0) {
+        setBeaconJson(QStringLiteral("{}"));
+        return;
+    }
+    QJsonObject out{
+        {QStringLiteral("chainId"), chain},
+        {QStringLiteral("configured"), false},
+        {QStringLiteral("providers"), QJsonArray()},
+        {QStringLiteral("proxy"), QString()},
+        {QStringLiteral("proxyRequired"), false},
+        {QStringLiteral("timeoutSecs"), kDefaultBeaconTimeoutSecs},
+    };
+    // Both are in-memory reads in beacon_api: no network I/O, so synchronous like eth_rpc's.
+    const QString configReply = modules().beacon_api_module.get_beacon_config(chain);
+    const QJsonObject config = parseObject(configReply);
+    if (config.value(QStringLiteral("ok")).toBool()) {
+        const QJsonObject c = config.value(QStringLiteral("config")).toObject();
+        out[QStringLiteral("configured")] = true;
+        out[QStringLiteral("proxy")] = c.value(QStringLiteral("proxy")).toString();
+        out[QStringLiteral("proxyRequired")] = c.value(QStringLiteral("proxyRequired")).toBool();
+        out[QStringLiteral("timeoutSecs")] =
+            c.value(QStringLiteral("timeoutSecs")).toInt(kDefaultBeaconTimeoutSecs);
+        // The listing adds each provider's health; the config's own list is the fallback.
+        const QJsonObject listed =
+            parseObject(modules().beacon_api_module.list_providers(chain));
+        out[QStringLiteral("providers")] = listed.value(QStringLiteral("ok")).toBool()
+            ? listed.value(QStringLiteral("providers")).toArray()
+            : c.value(QStringLiteral("providers")).toArray();
+    } else if (config.value(QStringLiteral("code")).toString() != QStringLiteral("unknown_chain")) {
+        // Not "no record for this chain": beacon_api could not be read at all.
+        out[QStringLiteral("error")] = replyError(configReply, QStringLiteral("beacon_api"));
+    }
+    setBeaconJson(compact(out));
+}
+
+void EthRpcUiBackend::addBeaconProvider(int chainId, QString endpoint, QString id)
+{
+    setLastError(QString());
+    const QString trimmed = endpoint.trimmed();
+    if (trimmed.isEmpty()) {
+        setLastError(QStringLiteral("enter a Beacon API endpoint URL"));
+        return;
+    }
+    QJsonObject item{{QStringLiteral("endpoint"), trimmed}};
+    if (!id.trimmed().isEmpty())
+        item[QStringLiteral("id")] = id.trimmed();
+    if (!failed(modules().beacon_api_module.add_provider(chainId, compact(item)),
+                QStringLiteral("beacon provider"), QStringLiteral("beacon_api")))
+        refreshBeacon();
+}
+
+void EthRpcUiBackend::setBeaconProviderEnabled(int chainId, QString id, bool enabled)
+{
+    setLastError(QString());
+    failed(modules().beacon_api_module.set_provider_enabled(chainId, id, enabled),
+           QStringLiteral("beacon provider"), QStringLiteral("beacon_api"));
+    // Refreshed on refusal too, so a switch beacon_api declined snaps back.
+    refreshBeacon();
+}
+
+void EthRpcUiBackend::removeBeaconProvider(int chainId, QString id)
+{
+    setLastError(QString());
+    failed(modules().beacon_api_module.remove_provider(chainId, id),
+           QStringLiteral("beacon provider"), QStringLiteral("beacon_api"));
+    const QJsonObject probe = parseObject(beaconProbeJson());
+    if (probe.value(QStringLiteral("provider")).toString() == id)
+        setBeaconProbeJson(QStringLiteral("{}"));
+    refreshBeacon();
+}
+
+void EthRpcUiBackend::testBeaconProvider(int chainId, QString id)
+{
+    setLastError(QString());
+    const QJsonObject shown = parseObject(beaconJson());
+    const int timeoutSecs = shown.value(QStringLiteral("chainId")).toInt() == chainId
+        ? shown.value(QStringLiteral("timeoutSecs")).toInt(kDefaultBeaconTimeoutSecs)
+        : kDefaultBeaconTimeoutSecs;
+    const int budgetMs = timeoutSecs * 1000 + kBeaconTestMarginMs;
+    quint64 slot = 0;
+    if (!m_beaconProbeInFlight.take(budgetMs, &slot))
+        return;
+    setBeaconProbeJson(compact(QJsonObject{{QStringLiteral("chainId"), chainId},
+                                           {QStringLiteral("provider"), id},
+                                           {QStringLiteral("pending"), true}}));
+    setStatusText(QStringLiteral("Testing beacon provider %1…").arg(id));
+
+    // ASYNC deliberately: a live light-client fetch, on the GUI thread otherwise.
+    modules().beacon_api_module.provider_healthAsyncResult(chainId, id,
+        [this, chainId, id, slot](logos::AsyncResult<QString> r) {
+            m_beaconProbeInFlight.release(slot);
+            setStatusText(QStringLiteral("Ready"));
+
+            // `ok` says the check ran; `healthy` and `servesLightClient` are its findings.
+            QJsonObject out;
+            if (!r.ok()) {
+                out[QStringLiteral("ok")] = false;
+                out[QStringLiteral("error")] = QStringLiteral("beacon_api did not answer the test");
+            } else if (replyOk(r.value)) {
+                out = parseObject(r.value);
+            } else {
+                out[QStringLiteral("ok")] = false;
+                out[QStringLiteral("error")] = replyError(r.value, QStringLiteral("beacon_api"));
+            }
+            out[QStringLiteral("chainId")] = chainId;
+            out[QStringLiteral("provider")] = id;
+            setBeaconProbeJson(compact(out));
+            // The check also moved the provider's health counters. Queued: the re-read is
+            // synchronous, and this arrives on an IPC callback.
+            QTimer::singleShot(0, this, [this] { refreshBeacon(); });
+        },
+        Timeout(budgetMs));
+}
+
+void EthRpcUiBackend::setBeaconTransport(int chainId, QString proxy, bool proxyRequired,
+                                         int timeoutSecs)
+{
+    const QString p = proxy.trimmed();
+    QJsonObject patch{
+        {QStringLiteral("proxy"), p.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(p)},
+        {QStringLiteral("proxyRequired"), proxyRequired},
+        {QStringLiteral("timeoutSecs"), timeoutSecs},
+    };
+    setLastError(QString());
+    if (!failed(modules().beacon_api_module.set_beacon_config(chainId, compact(patch)),
+                QStringLiteral("beacon transport"), QStringLiteral("beacon_api")))
+        refreshBeacon();
 }

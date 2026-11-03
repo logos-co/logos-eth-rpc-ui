@@ -9,6 +9,11 @@
       url = "github:logos-co/logos-evm-eth-rpc-module";
       inputs.logos-module-builder.follows = "logos-module-builder";
     };
+    # The consensus-layer providers the verified proxy reads, edited per chain here.
+    beacon_api_module = {
+      url = "github:logos-co/logos-evm-beacon-api-module";
+      inputs.logos-module-builder.follows = "logos-module-builder";
+    };
   };
 
   # mkLogosQmlModule, NOT mkLogosModule: the generic builder compiles the plugin but never

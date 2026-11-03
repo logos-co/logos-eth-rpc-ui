@@ -1,7 +1,7 @@
 {
   "name": "eth_rpc_ui",
   "display_name": "Ethereum RPC",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "ui_qml",
   "interface": "universal",
   "category": "wallet",
@@ -11,7 +11,8 @@
   "icon": "src/icons/eth_rpc.png",
   "view": "qml/EthRpcView.qml",
   "dependencies": [
-    { "name": "eth_rpc_module", "version": "~0.1.0" }
+    { "name": "eth_rpc_module", "version": "~0.1.0" },
+    { "name": "beacon_api_module", "version": "~0.1.0" }
   ],
   "provides": [
     { "intent": "evm.rpc.configure", "handoff": true }

@@ -1,9 +1,10 @@
 # logos-eth-rpc-ui
 
 Basecamp Networks panel for
-[`eth_rpc_module`](https://github.com/logos-co/logos-evm-eth-rpc-module):
-device-wide enabled networks and scope, chain metadata, JSON-RPC endpoints, and
-the light-client verified-routing mode.
+[`eth_rpc_module`](https://github.com/logos-co/logos-evm-eth-rpc-module) and
+[`beacon_api_module`](https://github.com/logos-co/logos-evm-beacon-api-module):
+device-wide enabled networks and scope, chain metadata, JSON-RPC endpoints, the
+light-client verified-routing mode, and each chain's beacon (consensus-layer) providers.
 
 A `ui_qml` module — a QML view (`src/qml/EthRpcView.qml`) over a small C++ backend
 (`src/eth_rpc_ui_backend.{h,cpp}`) whose QML-facing surface is the QtRO contract in
@@ -27,7 +28,7 @@ So the wallet loses `set_rpc_url` and `set_verified_proxy_mode` outright. It sti
 the verified verdict in full — the chip, the banner, the frozen-rows notice — it just cannot
 **set** it. That is what makes the split enforced rather than a convention.
 
-## Five decisions worth knowing
+## Decisions worth knowing
 
 **The chain roster belongs to eth_rpc.** `list_chain_configs` supplies the names,
 native-asset metadata, enabled state, `inScope` decision, and mainnet/testnet
@@ -70,6 +71,19 @@ input, no `metadata.json` key and nothing staged into the `.lgx`. Two things bre
 one carrying this module's private URI, and overwriting it lets Qt's process-global type cache
 cross-match another plugin's same-named types), and creating a `src/qml/Logos/` directory (the
 host's `RestrictedUrlInterceptor` reserves that prefix case-insensitively).
+
+**A chain's beacon providers sit next to its endpoint.** `beacon_api_module` keeps the
+consensus-layer providers per chain, and the verified proxy takes the enabled ones' URLs from
+it when it starts. The section lists them with their health (`list_providers`), adds, enables,
+disables and removes them, runs `provider_health` on one (async, bounded by the chain's own
+beacon timeout), and writes `proxy` / `proxyRequired` / `timeoutSecs` through
+`set_beacon_config`. It calls `init_defaults` on start and re-reads on `beacon_config_changed`.
+Two pieces of copy matter. Plain-http providers are acceptable here, unlike for the JSON-RPC
+endpoint, because the light client checks sync-committee signatures: a provider can withhold
+data but not forge it. And the verified proxy fetches from those URLs itself, so a change
+applies on its next start, `beacon_api`'s failover and proxy do not apply to it, and it refuses
+to start on a chain set to go through a proxy. Edits are gated on the chain having an eth_rpc
+configuration, like the rest of the form; removing a chain here leaves its beacon providers.
 
 ## Known limits
 
